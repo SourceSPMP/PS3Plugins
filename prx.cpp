@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/memory.h>
+#include <sys/tty.h>
 
 IVEngineClient* client;
 uint64_t enginebase;
@@ -142,9 +143,13 @@ int NET_OpenSocket(const char *net_interface, int& port, int protocol)
 	}
 
 	address.sin_port = NET_HostToNetShort((short)(port));
+	address.sin_family = AF_INET;
+
+	char dof[128];
+	unsigned int writelen;
+	//sys_tty_write(0, dof, snprintf(dof, 128, "NET_OpenSocket %x %i\n", address.sin_addr.s_addr, address.sin_port), &writelen);
 	ret = bind(newsocket, (struct sockaddr *)&address, sizeof(address));
 
-	address.sin_family = AF_INET;
 	return newsocket;
 }
 
@@ -188,12 +193,15 @@ struct ns_address
 };
 
 DetourHook* OpenSocketInternalHk;
+int funnysocket[4] = { -1, -1, -1, -1 };
+
+typedef void(*LOL)(unsigned long long thisptr, int s, int nModule, int nSetPort, int nDefaultPort, const char *pName, int nProtocol, bool bTryAny);
 
 static void OpenSocketInternal(int nModule, int nSetPort, int nDefaultPort, const char *pName, int nProtocol, bool bTryAny)
 {
-	//char dof[128];
-	//unsigned int writelen;
-	//sys_tty_write(0, dof, snprintf(dof, 128, "%i %i %i %s %i\n", nModule, nSetPort, nDefaultPort, pName, nProtocol), &writelen);
+	char dof[128];
+	unsigned int writelen;
+	//sys_tty_write(0, dof, snprintf(dof, 128, "OpenSocketInternal %i %i %i %s %i\n", nModule, nSetPort, nDefaultPort, pName, nProtocol), &writelen);
 	int iVar8 = nDefaultPort;
 	if (nSetPort != 0) {
 		iVar8 = nSetPort;
@@ -209,16 +217,17 @@ static void OpenSocketInternal(int nModule, int nSetPort, int nDefaultPort, cons
 	{
 		piVar7 = (int*)(net_sockets + iVar2 + 8);
 	}
-	*piVar7 = NET_OpenSocket("127.0.0.1", iVar8, nProtocol);
+	*piVar7 = NET_OpenSocket("localhost", iVar8, nProtocol);
+	funnysocket[nModule] = *piVar7;
 	*(int*)(net_sockets + iVar2) = iVar8;
 	//sys_tty_write(0, dof, snprintf(dof, 128, "addr: %x\n", net_sockets + iVar2), &writelen);
-	//(**(LOL**)(*(int *)(enginebase+0x0055f84c) + 0xc))
-	//	((enginebase + 0x0055f84c), *piVar7, nModule, nSetPort, nDefaultPort, pName,
-	//	nProtocol, bTryAny);
+	/*(**(LOL**)(**(int **)(enginebase+0x0055f84c) + 0xc))
+		((enginebase + 0x0055f84c), *piVar7, nModule, nSetPort, nDefaultPort, pName,
+		nProtocol, bTryAny);*/
 }
 DetourHook* CSteamSocketMgrSendtoHk;
 
-int funnysocket[4] = { 0 };
+
 
 int CSteamSocketMgrSendto(unsigned long long thisptr, int s, const char * buf, int len, int flags, const ns_address &to)
 {
@@ -226,30 +235,60 @@ int CSteamSocketMgrSendto(unsigned long long thisptr, int s, const char * buf, i
 	memset(&c, 0, sizeof(sockaddr_in));
 	c.sin_family = AF_INET;
 	//c.sin_port = to.m_adr.port;
-	c.sin_port = 27006;
+	if (s == 0)
+	{
+		c.sin_port = 27006;
+	}
+	else
+	{
+		c.sin_port = 27016;
+	}
 	c.sin_addr = *(in_addr *)&to.m_adr.ip;
 	//c.sin_addr = ()0xc0a8011e;
 	char dof[128];
 	unsigned int writelen;
-	//sys_tty_write(0, dof, snprintf(dof, 128, "%i %i %x\n", s, len, flags), &writelen);
+	
 	//int ret = sendto(s, (void*)buf, len, flags, (sockaddr*)&c, sizeof(c));
-	if (funnysocket[s] == 0)
+	if (funnysocket[s] == -1)
 	{
 		funnysocket[s] = socket(AF_INET, SOCK_DGRAM, 17);
 		bind(funnysocket[s], (struct sockaddr *)&c, sizeof(c));
 		unsigned int opt = 1;
 		ioctl(funnysocket[s], SO_NBIO, (unsigned long*)&opt);
 	}
-	c.sin_port = 27015;
+	c.sin_port = to.m_adr.port;
+
+	//sys_tty_write(0, dof, snprintf(dof, 128, "sendto: %i %i %i %x %x %i\n", funnysocket[s], s, len, flags, c.sin_addr.s_addr, c.sin_port), &writelen);
 	return sendto(funnysocket[s], (void*)buf, len, flags, (sockaddr*)&c, sizeof(c));
 }
+
 
 DetourHook* CSteamSocketMgrRecvfromHk;
 int CSteamSocketMgrRecvfrom(unsigned long long thisptr, int s, char * buf, int len, int flags, ns_address *from, ns_address *otherfrom)
 {
+	if (funnysocket[s] == -1)
+	{
+		struct sockaddr_in c;
+		memset(&c, 0, sizeof(sockaddr_in));
+		c.sin_family = AF_INET;
+		//c.sin_port = to.m_adr.port;
+		if (s == 2)
+		{
+			c.sin_port = 27005;
+		}
+		else
+		{
+			c.sin_port = 27015;
+		}
+		c.sin_addr.s_addr = INADDR_ANY;
+		funnysocket[s] = socket(AF_INET, SOCK_DGRAM, 17);
+		bind(funnysocket[s], (struct sockaddr *)&c, sizeof(c));
+		unsigned int opt = 1;
+		ioctl(funnysocket[s], SO_NBIO, (unsigned long*)&opt);
+	}
 	char dof[128];
 	unsigned int writelen;
-	//sys_tty_write(0, dof, snprintf(dof, 128, "recv: %i %i %x\n", s, len, flags), &writelen);
+	//sys_tty_write(0, dof, snprintf(dof, 128, "recv: %i %i %i %x %x %i\n", funnysocket[s], s, len, flags, from->m_adr.ip, from->m_adr.port), &writelen);
 	sockaddr sadrfrom;
 	socklen_t fromlen = sizeof(sadrfrom);
 	int iret = recvfrom(funnysocket[s], buf, len, flags, &sadrfrom, &fromlen);
@@ -280,7 +319,7 @@ int getkbLen(char* str)
 {
 	int nullCount = 0;
 	int i = 0; //num of chars..
-	for (i = 0; i < 64; i++)
+	for (i = 0; i < 512; i++)
 	{
 		if (nullCount == 2) { break; }
 		if (*(str + i) == 0x00) { nullCount++; }
@@ -314,7 +353,7 @@ void sysutil_callback(uint64_t status, uint64_t param, void *userdata)
 	}
 	CellOskDialogCallbackReturnParam OutputInfo;
 	OutputInfo.result = CELL_OSKDIALOG_INPUT_FIELD_RESULT_OK;
-	OutputInfo.numCharsResultString = 32;
+	OutputInfo.numCharsResultString = CELL_OSKDIALOG_STRING_SIZE;
 	uint16_t Result_Text_Buffer[CELL_OSKDIALOG_STRING_SIZE + 1];
 	OutputInfo.pResultString = Result_Text_Buffer;
 	cellOskDialogUnloadAsync(&OutputInfo);
@@ -327,6 +366,8 @@ void sysutil_callback(uint64_t status, uint64_t param, void *userdata)
 
 void ConsoleKeyboardInputThread(uint64_t IDK)
 {
+	//sys_timer_usleep(3000000);
+	//client->ClientCmd("killserver");
 	for (;;)
 	{
 		sys_timer_usleep(90000);
@@ -375,16 +416,13 @@ void ConsoleKeyboardInputThread(uint64_t IDK)
 	}
 }
 
-bool CEmptyServerPlugin::Load(CreateInterfaceFn interfaceFactory, CreateInterfaceFn gameServerFactory)
+uint64_t GetModuleAddress(const char* name, uint64_t defaultaddr)
 {
-	client = (IVEngineClient*)interfaceFactory("VEngineClient013", NULL);
-
-	enginebase = 0;
-	sys_prx_id_t enginesprx = sys_prx_get_module_id_by_name("engine_rel", 0, 0);
-	if (enginesprx < 0)
+	sys_prx_id_t sprx = sys_prx_get_module_id_by_name(name, 0, 0);
+	if (sprx < 0)
 	{
 		//cellMsgDialogOpen2(ok_message, "RPCS3 does not support sys_prx_get_module_id_by_name which means that\nyou wont get built-in source engine console, sorry!\n(cry about it to rpcs3 devs)", closethedialog, NULL, NULL);
-		enginebase = 0x670000;
+		return defaultaddr;
 	}
 	else
 	{
@@ -400,9 +438,16 @@ bool CEmptyServerPlugin::Load(CreateInterfaceFn interfaceFactory, CreateInterfac
 		info.segments_num = sizeof(segments) / sizeof(sys_prx_segment_info_t);
 		info.filename = filename;
 		info.filename_size = sizeof(filename);
-		sys_prx_get_module_info(enginesprx, 0, &info);
-		enginebase = info.segments->base;
+		sys_prx_get_module_info(sprx, 0, &info);
+		return info.segments->base;
 	}
+}
+
+bool CEmptyServerPlugin::Load(CreateInterfaceFn interfaceFactory, CreateInterfaceFn gameServerFactory)
+{
+	client = (IVEngineClient*)interfaceFactory("VEngineClient013", NULL);
+
+	enginebase = GetModuleAddress("engine_rel", 0x670000);
 	if (enginebase)
 	{
 		OpenSocketInternalHk = new DetourHook(enginebase + 0x001febcc, (uintptr_t)OpenSocketInternal);
@@ -410,6 +455,22 @@ bool CEmptyServerPlugin::Load(CreateInterfaceFn interfaceFactory, CreateInterfac
 		CSteamSocketMgrRecvfromHk = new DetourHook(enginebase + 0x0020555c, (uintptr_t)CSteamSocketMgrRecvfrom);
 		Net_SendStreamHk = new DetourHook(enginebase + 0x001fa790, (uintptr_t)NET_SendStream);
 		NET_CloseSocketHk = new DetourHook(enginebase + 0x001fa538, (uintptr_t)NET_CloseSocket);
+		write_mem(enginebase + 0x0017c1d0, 0x4800000c);
+		write_mem(enginebase + 0x0017f18c, 0x48000038);
+		write_mem(enginebase + 0x0017f1e8, 0x48000038);
+		write_mem(enginebase + 0x0017fe60, 0x42800090);
+		
+		
+		
+	}
+	uint64_t serverbase = GetModuleAddress("server_rel", 0x2910000);
+	if (serverbase)
+	{
+		write_mem(serverbase + 0x00539d50, 0x38600020);
+		write_mem(serverbase + 0x00539d5c, 0x3bc00020);
+		write_mem(serverbase + 0x001cda80, 0x480000b0);
+		write_mem(serverbase + 0x0016f938, 0x48000070);
+		
 	}
 	sys_ppu_thread_t keyboardppulmao;
 	sys_ppu_thread_create(&keyboardppulmao, ConsoleKeyboardInputThread, 0, 420, 0x5000, SYS_PPU_THREAD_CREATE_JOINABLE, "If_you_see_this_KEEP_YOURSELF_SAFE");
